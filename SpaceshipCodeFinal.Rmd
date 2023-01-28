@@ -1,0 +1,574 @@
+---
+title: "Case Competition"
+author: "Antonela Stoica"
+date: "2022-12-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+rm(list = ls())
+library(MASS)
+library(pROC)
+library(rpart)
+library(randomForest)
+library(xgboost)
+library(nnet)
+library(corrplot)
+library(VIM)
+library(psych)
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(mice)
+```
+
+# Read in the Data
+```{r}
+data <- read.csv("train.csv")
+head(data)
+```
+Here we get a preview of the first few rows in our data set. We start off by doing some exploratory analysis.
+
+# Exploratory Analysis
+## Look at the Missing Values
+```{r}
+aggr(data, prop=FALSE, numbers = TRUE, cex.lab = 1, cex.axis = 0.5, gap = 3)
+```
+We start by looking at the missing data. The variables Age, RoomService, FoodCourt, ShoppingMall, Spa, and VRDeck seem to have missing values. In the graph on the right, we can see that out of the 8693 observations, if we deleted all of the rows with null values, we would be left with 7620 observations.
+
+```{r}
+x <- as.data.frame(abs(is.na(data)))
+colMeans(x)
+```
+In this chart we see the proportion of missing data for each value. As we saw in the previous visualization, the variables with missing data are Age, RoomService, FoodCourt, ShoppingMall, Spa, and VRDeck, and they all seem to be missing around 2% of their values. 
+
+## Descriptive Statistics
+```{r}
+summary(data)
+```
+After looking at the missing values, we wanted to get some descriptive statistics on our data set before we start feature engineering and cleaning the data. One important observation that we notice here is that a lot of our variables are characters instead of numbers, which will require some altering.
+
+```{r}
+describe(data)
+```
+In this chart we see some basic statistics. For example, the mean age is about 29 years old and the average spending on RoomService is about $225. Next, we move on to data preparation. 
+
+# Data Preparation
+## Mising Values
+```{r}
+data[data == ""] <- NA
+```
+We noticed that some values that are NA are coded as "" in our data instead of NA, so we changed them to all be NA. This will make it easier for us to determine where there are null values. 
+
+```{r}
+x <- as.data.frame(abs(is.na(data)))
+colMeans(x)
+```
+Here, we see that there are more null values than we originally saw in our exploratory analysis because some were coded as "" instead of NA.
+
+## Converting Variables to Dummies
+```{r}
+data2 = data %>% 
+  mutate(deck = str_sub(Cabin, 1, 1),
+         num = as.numeric(str_sub(Cabin, 3, -3)),
+         side = str_sub(Cabin, -1, -1))
+
+```
+```{r}
+data2$id1 = as.numeric(substring(data2$PassengerId, 1, 4))
+data2$id2 = as.numeric(substring(data2$PassengerId, 6, 7))
+```
+We noticed in our data set that PassengerId and Cabin have more than one value per column, so we decided to split up those variables. For instance, cabin had "deck, "num" and "side" all in one column, so we separated that variable into three columns. PassengerId also had the group the passenger is travelling with and their number within the group in one column, so we separated those into two columns as well. 
+
+```{r}
+data2$CryoSleepD <- ifelse(data2$CryoSleep == 'True', 1, 0)
+data2$VIPD <- ifelse(data2$VIP == 'True', 1, 0)
+data2$TransportedD <- ifelse(data2$Transported == 'True', 1, 0)
+data2$HomePlanetEuropa <- ifelse(data2$HomePlanet == 'Europa', 1, 0)
+data2$HomePlanetMars <- ifelse(data2$HomePlanet == 'Mars', 1, 0)
+data2$DestinationTRAPPIST <- ifelse(data2$Destination == 'TRAPPIST-1e', 1, 0)
+data2$DestinationPSO <- ifelse(data2$Destination == 'PSO J318.5-22', 1, 0)
+data2$deckB <- ifelse(data2$deck == 'B', 1, 0)
+data2$deckF <- ifelse(data2$deck == 'F', 1, 0)
+data2$deckA <- ifelse(data2$deck == 'A', 1, 0)
+data2$deckG <- ifelse(data2$deck == 'G', 1, 0)
+data2$deckE <- ifelse(data2$deck == 'E', 1, 0)
+data2$deckD <- ifelse(data2$deck == 'D', 1, 0)
+data2$deckC <- ifelse(data2$deck == 'C', 1, 0)
+data2$sideP <- ifelse(data2$side == 'P', 1, 0)
+```
+Next, we are creating dummies for all of the necessary variables. 
+
+```{r}
+keep <- c("id1", "id2", "CryoSleepD", "Age", "VIPD", "RoomService", "FoodCourt","ShoppingMall","Spa","VRDeck", "num","HomePlanetEuropa","HomePlanetMars","DestinationTRAPPIST","DestinationPSO","deckB","deckF","deckA","deckG","deckE","deckD","deckC","sideP", "TransportedD")
+
+training_data <- data2[,keep]
+```
+Here, we are keeping only the data that we need; hence dropping the columns that are of character type.
+
+```{r}
+summary(training_data)
+```
+Now we see that all of our variables are numeric and we can use them in our models. However, there are still a lot of NA's. 
+
+```{r}
+x <- as.data.frame(abs(is.na(training_data)))
+colMeans(x)
+```
+Once again, we look at the proportion of NA's in our data set. From this table, we can see that apart from the id's and transported columns, all the other columns have about 2% of their data as NA. So, we start imputing some variables. 
+
+# Imputing Variables
+## Imputing the Spending Variables when CryoSleep = 1
+```{r}
+train_data2 = training_data %>%
+  mutate(RoomService = ifelse(is.na(RoomService) & CryoSleepD == 1, 0, RoomService),
+         FoodCourt = ifelse(is.na(FoodCourt) & CryoSleepD == 1, 0, FoodCourt),
+         ShoppingMall = ifelse(is.na(ShoppingMall) & CryoSleepD == 1, 0, ShoppingMall),
+         Spa = ifelse(is.na(Spa) & CryoSleepD == 1, 0, Spa),
+         VRDeck = ifelse(is.na(VRDeck) & CryoSleepD == 1, 0, VRDeck))
+
+x <- as.data.frame(abs(is.na(train_data2)))
+colMeans(x)
+```
+First, if the people are in CryoSleep, they are not spending any money, so the values for the spending categories would be zero.
+
+
+## Imputing using MICE 
+```{r}
+imputed_Data <- mice(train_data2, m=3, maxit = 7, method = 'pmm', seed = 500)
+final_data <- complete(imputed_Data,2)
+```
+Here, we are using the MICE package to impute the remaining variables. 
+
+## Checking the Final, Prepared, Data
+```{r}
+full_obs <- final_data[complete.cases(final_data),]
+nrow(full_obs)/8693
+```
+Now we see that we are left with all 8693 rows and 100% of them are not null. Therefore, using this imputing method allowed us to maintain all of our observations. We can now move on to some descriptive statistics.
+
+# Descriptive Statistics      
+## Correlation
+```{r}
+corrplot(cor(final_data), tl.cex=.7, order="hclust")
+```
+In this correlation matrix we can see that CryoSleep is the variable most correlated with our outcome variable, TransportedD. Some of the decks and the spending variables also seem to have some correlation with TransportedD.
+
+## Histograms
+```{r}
+attach(final_data)
+par(mfrow=c(3,2)) 
+hist(Age)
+hist(RoomService)
+hist(FoodCourt)
+hist(ShoppingMall)
+hist(Spa)
+hist(VRDeck)
+detach(final_data)
+```
+Here we have the histograms for all of our continuous variables, which are Age, RoomService, FoodCourt, ShoppingMall, Spa, and VRDeck. We can see that Age is relatively normally distributed but a little skewed. The rest of the variables are heavily skewed. 
+
+## Summary Statistics
+```{r}
+summary(final_data)
+```
+In this chart we see some summary statistics for each of the variable, such as the min's, max's, means and medians. 
+
+```{r}
+describe(final_data)
+```
+This chart shows some more descriptive statistics where we can also see the n and the sd along with other statistics. For example, for the spending categories, FoodCourt has the highest average spending and ShoppingMall has the lowest spending. Now we can start building our models. 
+
+# Model Building
+## Splitting the Data Set
+```{r}
+set.seed(42)
+trn_idx = sample(1:nrow(final_data), 0.8 * nrow(final_data))
+train = final_data[trn_idx,]  
+test = final_data[-trn_idx,]
+```
+First, we need to split up the data set into the training and test sets. 
+
+## Create an Accuracy Function
+```{r}
+Accuracy <- function(y, yhat)  { (sum(y==1 & yhat==1) + sum(y==0 & yhat==0)) / (sum(y==1) + sum(y==0))}
+```
+Then, we create an accuracy function (the classification rate) to measure the performance of our models. 
+
+## Logistic Regression
+```{r}
+glm <- glm(TransportedD  ~ ., family = binomial(link = "logit"), data = train)
+summary(glm)
+```
+The first model we run is a logistic regression because it is easier to interpret and will provide a good baseline for the rest of the models. Here we see that the significant variables are CryoSleepD, Age, RoomService, FoodCourt, ShoppingMall, Spa, VRDeck, HomePlanetEuropa, HomePlanetMars, DestinationTRAPPIST, DestinationPSO, and sideP.
+
+```{r}
+yhat.glm <- predict(glm, test, type="response")
+Accuracy(test$TransportedD, yhat.glm > 0.5)
+```
+The accuracy is 81%, which is not bad for our first model. 
+
+```{r}
+table(test$TransportedD, yhat.glm > 0.5)
+```
+In this confusion table we can see our true negatives and our true positives - 628 and 779 respectively - and we could use it to calculate the TPR, TNR and missclassification rate. For the purposes of this report, we are mostly just looking at accuracy, however. 
+
+## LDA
+```{r}
+lda <- lda(TransportedD ~ ., data = train)
+lda
+```
+Next, we run an LDA. 
+
+```{r}
+yhat.lda <- predict(lda, test)$posterior[,2]
+Accuracy(test$TransportedD, yhat.lda > 0.5)
+```
+The accuracy is 78% which is lower than for our logistic regression. 
+
+```{r}
+table(test$TransportedD, yhat.lda > 0.5)
+```
+This is the confusion table for the LDA. 
+
+## QDA
+```{r}
+qda <- qda(TransportedD ~ ., data = train)
+qda
+```
+We also run a QDA. 
+
+```{r}
+yhat.qda <- predict(qda, test)$posterior[,2]
+Accuracy(test$TransportedD, yhat.qda > 0.5)
+```
+The accuracy drops to 77%.
+
+```{r}
+table(test$TransportedD, yhat.qda > 0.5)
+```
+In the confusion table for the QDA we can see that this model predicts true positives well, but does not predict true negatives that well. 
+
+## Classification Tree with Significant Features from Logistic Regression
+```{r}
+form1 <- formula(TransportedD ~ CryoSleepD + Age + RoomService + FoodCourt + ShoppingMall + Spa + VRDeck + HomePlanetEuropa + HomePlanetMars + DestinationTRAPPIST + DestinationPSO + sideP)
+
+t1 <- rpart(form1, data=train, cp=.001, method="class")
+plot(t1,uniform=T,compress=T,margin=.05,branch=0.3)
+text(t1, cex=.7, col="navy",use.n=TRUE)
+```
+Here we run a single tree with only the variables that were signifcant in the logistic regression. 
+
+```{r}
+plotcp(t1)
+```
+
+```{r}
+CP <- printcp(t1)
+```
+
+### Choosing our Pruning Value
+```{r}
+cp <- CP[,1][CP[,2] == 15]
+cp
+```
+Now, we choose our pruning value. In the plot it seems that the X-val relative error crosses the line at value 15, so we choose that one for our pruning (which is cp 7).  
+
+```{r}
+t2 <- prune(t1,cp=cp[1])
+plot(t2,uniform=T,compress=T,margin=.05,branch=0.3)
+text(t2, cex=.7, col="navy",use.n=TRUE)
+```
+This is our pruned tree which looks simpler than our full tree. So, we use this one to test for the accuracy.
+
+```{r}
+yhat.t2 <- predict(t2, test, type="prob")[,2]
+Accuracy(test$TransportedD, yhat.t2 > 0.5)
+```
+The accuracy is 80%, which is not low, but it is not higher than the logistic regression's accuracy. 
+
+```{r}
+table(test$TransportedD, yhat.t2 > 0.5)
+```
+This is the classification tree's confusion matrix.
+
+## Random Forest
+```{r}
+X.rf1 <- as.matrix(train[,0:23])
+Y.rf1 <- factor(train$TransportedD)
+
+mtry <- round(ncol(X.rf1)^.5)
+ntree <- 1000
+rf1 <- randomForest(x=X.rf1, y=Y.rf1, ntree=ntree, mtry=mtry, importance=TRUE)
+rf1
+```
+Now, we run a random forest because it is an aggregate model and thus usually more stable and accurate than the single classification tree.
+
+```{r}
+yhat.rf1 <- predict(rf1, test, type="prob")[,2]
+Accuracy(test$TransportedD, yhat.rf1 > 0.5)
+```
+As expected, the random forest has a higher accuracy compared to the classification tree: 82%. So far, this is our best-performing model.
+
+```{r}
+table(test$TransportedD, yhat.rf1 > 0.5)
+```
+In the confusion table, we can see that this model is decent at predicting both true positives and true negatives.
+
+## Random Forest with Signifcant Features from Logistic Regression
+```{r}
+X.rf2 <- as.matrix(train[,c("CryoSleepD","Age","RoomService","FoodCourt","ShoppingMall","Spa","VRDeck","HomePlanetEuropa","HomePlanetMars","DestinationTRAPPIST","DestinationPSO","sideP")])
+Y.rf2 <- factor(train$TransportedD)
+
+mtry <- round(ncol(X.rf2)^.5)
+ntree <- 1000
+rf2 <- randomForest(x=X.rf2, y=Y.rf2, ntree=ntree, mtry=mtry, importance=TRUE)
+rf2
+```
+Next, we decided to run more random forests. We wanted to run one where we only include the variables that the logistic regression pointed out as significant, to see if it improves accuracy.
+
+```{r}
+yhat.rf2 <- predict(rf2, test, type="prob")[,2]
+Accuracy(test$TransportedD, yhat.rf2 > 0.5)
+```
+Accuracy dropped slightly, 81%, so this model is not bad but it is not better than the random forest with all of the variables. We would like to point out, however, that this model has less features so it is simpler and still has a high accuracy.
+
+```{r}
+table(test$TransportedD, yhat.rf2 > 0.5)
+```
+This is the confusion table for this random forest.
+
+## Random Forest without id Variables
+```{r}
+X.rf3 <- as.matrix(train[,3:23])
+Y.rf3 <- factor(train$TransportedD)
+
+mtry <- round(ncol(X.rf3)^.5)
+ntree <- 1000
+rf3 <- randomForest(x=X.rf3, y=Y.rf3, ntree=ntree, mtry=mtry, importance=TRUE)
+rf3
+```
+Next we try another random forest: this one includes all of the variables apart from the id's. 
+
+```{r}
+yhat.rf3 <- predict(rf3, test, type="prob")[,2]
+Accuracy(test$TransportedD, yhat.rf3 > 0.5)
+```
+Accuracy is 82%, which very similar to the first random forest. 
+
+```{r}
+table(test$TransportedD, yhat.rf3 > 0.5)
+```
+This is the confusion matrix for this model.
+
+## Gradient Boost
+```{r}
+Y.gb <- train$TransportedD
+parm <- list(nthread=2, max_depth=2, eta=0.10)
+bt <- xgboost(parm, data=X.rf1, label=Y.gb, verbose=2, objective='binary:logistic', nrounds=20)
+
+imp <- xgb.importance(feature_names=colnames(X.rf1), model=bt)
+imp
+
+xgb.plot.importance(imp, rel_to_first = TRUE, xlab = "Relative importance")
+```
+Now we try a gradient boost. In this chart we can see the relative importance of each feature, and CryoSleep seems to be the most important one by far. Some of the spending variables such as Spa and FoodCourt also seem to have a relatively high importance. 
+
+```{r}
+X.tst <- as.matrix(test[,0:23])
+yhat.bt <- predict(bt, X.tst) 
+Accuracy(test$TransportedD, yhat.bt > 0.5)
+```
+Accuracy is 82%, which is high, but not as high as for our first random forest. 
+
+```{r}
+table(test$TransportedD, yhat.bt > 0.5)
+```
+Here we have the confusion matrix for the gradient boost.
+
+## Gradient Boost with Signifcant Features from Logistic Regression
+```{r}
+Y.gb <- train$TransportedD
+parm <- list(nthread=2, max_depth=2, eta=0.10)
+bt2 <- xgboost(parm, data=X.rf2, label=Y.gb, verbose=2, objective='binary:logistic', nrounds=20)
+
+imp2 <- xgb.importance(feature_names=colnames(X.rf2), model=bt2)
+imp2
+
+xgb.plot.importance(imp2, rel_to_first = TRUE, xlab = "Relative importance")
+```
+We also wanted to run a gradient boost with only those features that appeared to be significant in the logistic regression. This chart displays the relative importance of each feature, and as we can see, it is very similar to the previous chart for the first gradient boost, except this one has less features. 
+
+```{r}
+X.tst2 <- as.matrix(test[,c("CryoSleepD","Age","RoomService","FoodCourt","ShoppingMall","Spa","VRDeck","HomePlanetEuropa","HomePlanetMars","DestinationTRAPPIST","DestinationPSO","sideP")])
+yhat.bt2 <- predict(bt2, X.tst2) 
+Accuracy(test$TransportedD, yhat.bt2 > 0.5)
+```
+The accuracy went down a little bit, so the first gradient boost was slightly better. 
+
+```{r}
+table(test$TransportedD, yhat.bt2 > 0.5)
+```
+In this confusion table we can see that this model performed a little worse at predicting true negatives compared to the first gradient boost. 
+
+## Neural Net
+```{r}
+nntrain <- train
+nntrain[,c("Age","RoomService","FoodCourt","ShoppingMall","Spa","VRDeck","num")]  <- scale(nntrain[,c("Age","RoomService","FoodCourt","ShoppingMall","Spa","VRDeck","num")])
+
+nntest <- test
+nntest[,c("Age","RoomService","FoodCourt","ShoppingMall","Spa","VRDeck","num")]  <- scale(nntest[,c("Age","RoomService","FoodCourt","ShoppingMall","Spa","VRDeck","num")])
+
+form2 <- formula(TransportedD ~ .)
+
+nn1 <- nnet(form2, data = nntrain, size = 7, maxit = 500, decay=0.002)
+nn1
+
+```
+We also wanted to experiment with some neural nets. 
+
+```{r}
+yhat.nn1 <- predict(nn1, test)
+Accuracy(test$TransportedD, yhat.nn1 > 0.5)
+```
+Here, the accuracy is now 53% so this model does not perform the best. 
+
+```{r}
+table(test$TransportedD, yhat.nn1 > 0.5)
+```
+This is the confusion matrix for this first neural net. 
+
+## Neural Net 2
+```{r}
+nn2 <- nnet(form2, data = nntrain, size = 10, maxit = 1000, decay=0.002)
+nn2
+```
+We wanted to give neural nets one more try, and run another one. This time, with size 10, maxit 1000, and decay 0.002. 
+
+```{r}
+yhat.nn2 <- predict(nn2, test)
+Accuracy(test$TransportedD, yhat.nn2 > 0.5)
+```
+The accuracy is higher but it is still not the best model. 
+
+```{r}
+table(test$TransportedD, yhat.nn2 > 0.5)
+```
+This confusion matrix also shows that this model is not the most accurate. 
+
+# Winning Model - Full Random Forest 
+
+# Test Data
+Now we must prepare our test set for the submission. 
+
+## Reading in the data set
+```{r}
+test_data <- read.csv("test.csv")
+```
+We start by reading in the test set.
+
+## Changing "" to NA
+```{r}
+test_data[test_data == ""] <- NA 
+```
+We change all values that are coded as "" into NAs. 
+
+## Missing Data
+```{r}
+x <- as.data.frame(abs(is.na(test_data)))
+colMeans(x)
+```
+We now look at the proportion of missing values.
+
+## Splitting up Variables
+```{r}
+test_data = test_data %>% 
+  mutate(deck = str_sub(Cabin, 1, 1),
+         num = as.numeric(str_sub(Cabin, 3, -3)),
+         side = str_sub(Cabin, -1, -1))
+
+```
+```{r}
+test_data$id1 = as.numeric(substring(test_data$PassengerId, 1, 4))
+test_data$id2 = as.numeric(substring(test_data$PassengerId, 6, 7))
+```
+We split up cabin and the PassengerId into multiple columns. 
+
+## Creating Dummy Variables
+```{r}
+test_data$CryoSleepD <- ifelse(test_data$CryoSleep == 'True', 1, 0)
+test_data$VIPD <- ifelse(test_data$VIP == 'True', 1, 0)
+test_data$HomePlanetEuropa <- ifelse(test_data$HomePlanet == 'Europa', 1, 0)
+test_data$HomePlanetMars <- ifelse(test_data$HomePlanet == 'Mars', 1, 0)
+test_data$DestinationTRAPPIST <- ifelse(test_data$Destination == 'TRAPPIST-1e', 1, 0)
+test_data$DestinationPSO <- ifelse(test_data$Destination == 'PSO J318.5-22', 1, 0)
+test_data$deckB <- ifelse(test_data$deck == 'B', 1, 0)
+test_data$deckF <- ifelse(test_data$deck == 'F', 1, 0)
+test_data$deckA <- ifelse(test_data$deck == 'A', 1, 0)
+test_data$deckG <- ifelse(test_data$deck == 'G', 1, 0)
+test_data$deckE <- ifelse(test_data$deck == 'E', 1, 0)
+test_data$deckD <- ifelse(test_data$deck == 'D', 1, 0)
+test_data$deckC <- ifelse(test_data$deck == 'C', 1, 0)
+test_data$sideP <- ifelse(test_data$side == 'P', 1, 0)
+```
+We then create dummy variables and keep only the variables that we need for the model.
+
+```{r}
+keep_test <- c("PassengerId","id1","id2","CryoSleepD", "Age", "VIPD", "RoomService", "FoodCourt","ShoppingMall","Spa","VRDeck","num","HomePlanetEuropa","HomePlanetMars","DestinationTRAPPIST","DestinationPSO","deckB","deckF","deckA","deckG","deckE","deckD","deckC","sideP")
+
+full_test <- test_data[, keep_test]
+```
+
+## Imputing the data
+### Imputing when CryoSleep = 0
+```{r}
+full_test = full_test %>%
+  mutate(RoomService = ifelse(is.na(RoomService) & CryoSleepD == 1, 0, RoomService),
+         FoodCourt = ifelse(is.na(FoodCourt) & CryoSleepD == 1, 0, FoodCourt),
+         ShoppingMall = ifelse(is.na(ShoppingMall) & CryoSleepD == 1, 0, ShoppingMall),
+         Spa = ifelse(is.na(Spa) & CryoSleepD == 1, 0, Spa),
+         VRDeck = ifelse(is.na(VRDeck) & CryoSleepD == 1, 0, VRDeck))
+
+x <- as.data.frame(abs(is.na(full_test)))
+colMeans(x)
+```
+If the people are in CryoSleep, they are not spending any money, so the values for the spending categories would be zero.
+
+### Imputing using MICE 
+```{r}
+imputed_test <- mice(full_test, m=3, maxit = 7, method = 'pmm', seed = 500)
+final_test <- complete(imputed_test,2)
+```
+We now use MICE to impute the remainder of the variables. 
+
+### Checking the Final, Prepared, Data
+```{r}
+full_obs <- final_test[complete.cases(final_test),]
+nrow(full_obs)/4277
+```
+
+```{r}
+x <- as.data.frame(abs(is.na(final_test)))
+colMeans(x)
+```
+We check the final data set and observe that we do not have any more null values. 
+
+## Modeling
+```{r}
+final_test$Transported <- predict(rf1, final_test[,c("id1","id2","CryoSleepD", "Age", "VIPD", "RoomService", "FoodCourt","ShoppingMall","Spa","VRDeck","num","HomePlanetEuropa","HomePlanetMars","DestinationTRAPPIST","DestinationPSO","deckB","deckF","deckA","deckG","deckE","deckD","deckC","sideP")])
+head(final_test)
+```
+```{r}
+final_test$Transported <- ifelse(final_test$Transported == 1, "True", "False")
+submission <- final_test[,c("PassengerId","Transported")]
+```
+```{r}
+write.csv(submission, "DummyMasterSubmission.csv", row.names = FALSE)
+```
+
+We run the model and create the final csv file for the submission.
+
