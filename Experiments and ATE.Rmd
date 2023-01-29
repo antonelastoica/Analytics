@@ -1,0 +1,235 @@
+---
+title: "HW2"
+author: "Antonela Stoica"
+date: "2022-10-26"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Rocket Fuel Case
+## Clear the workspace and load the data
+
+```{r}
+rm(list = ls()) # Clear the workspace
+```
+
+```{r}
+library(knitr)
+library(dplyr)
+library(ggplot2)
+library(jtools)
+library(rcompanion)
+library(car)
+casedata <- read.csv("rocketfuel_deciles.csv") 
+```
+
+## Summarize the data
+
+```{r}
+summary(casedata)
+```
+These tables summarize all our variables. For example, the average total impressions were about 25, the max was 2065 and the min was 1 impression. The day of the week and the hours in which the users encountered the most number of impressions were Thursday (mean of 4) and 2-3 pm (mean of 14.47). 
+
+```{r}
+library(psych)
+psych::describe(casedata)
+```
+This table further summarizes our variables. We can see here that the total number of observations, n, was 588,101 and that 96% of users were in the test group (mean of 0.96). We can also see the standard deviations, medians, and other important statistics for all the variables. 
+
+## Create a a table to show the numbers and shares of individuals who were in the treatment vs. control group
+```{r}
+attach(casedata)  
+
+tb_treatment_full <- matrix(NA, nrow = 2, ncol = 2)  
+tb_treatment_full[1,] <- format(table(test), digits = 3) 
+tb_treatment_full[2,] <- format(prop.table(table(test)),digits = 3) 
+rownames(tb_treatment_full) <- c("Frequency", "Proportion" ) 
+colnames(tb_treatment_full) <- c("Control",  "Treatment")  
+kable(tb_treatment_full) 
+
+detach(casedata)
+```
+Here we can see the numbers and shares of individuals who were in the treatment and control groups. There were 23,524 of people in the control group and 564,577 in the test group. Therefore, only 4% of users were in the control group.
+
+## Check for balance in the pre-experiment variables
+```{r}
+attach(casedata)
+
+preexp <- casedata %>%  
+  select(tot_impr, mode_impr_day, mode_impr_hour, tot_impr_decile) 
+
+tb_preexp <- matrix(NA, nrow = 4, ncol = 2) 
+colnames(tb_preexp) <- c( "Mean Control", "Mean Treatment") 
+rownames(tb_preexp) <- colnames(preexp) 
+
+m<-as.matrix(round(aggregate(.~test,preexp,mean),2)) 
+
+tb_preexp[,1:2] <-t(m)[2:5,]  
+
+kable(tb_preexp) 
+detach(casedata)
+```
+This table displays the means of the pre-experiment variables - those that were not affected by the treatment - such as, total impressions, day of the week with most impressions, hour with most impressions, and total impressions deciles. The means of the variables are relatively balanced between the treatment and control groups, with the average for tot_impr being 25, mode_impr_day being 4 (Thursday), mode_impr_hour being 14 (2pm), and tot_impr_decile being 5. 
+
+```{r}
+attach(casedata)
+
+preexp <- casedata %>%  
+  select(tot_impr, mode_impr_day, mode_impr_hour, tot_impr_decile) 
+
+tb_preexp <- matrix(NA, nrow = 4, ncol = 2) 
+colnames(tb_preexp) <- c( "Standard Deviation Control", "Standard Deviation Treatment") 
+rownames(tb_preexp) <- colnames(preexp) 
+
+m<-as.matrix(round(aggregate(.~test,preexp,sd),2)) 
+
+tb_preexp[,1:2] <-t(m)[2:5,]  
+
+kable(tb_preexp) 
+detach(casedata)
+```
+This table shows the standard deviations of the pre-experiment variables across the two groups. As with the means, the standard deviations are also well balanced with standard deviations of 43 for tot_impr, 2 for mode_impr_day, 5 for mode_impr_hour, and 3 for tot_impr_decile. 
+
+```{r}
+attach(casedata)
+par(mfrow=c(2,4)) 
+
+hist(tot_impr[test==0], main = paste("Total Impressions"), xlab = "Control") 
+hist(mode_impr_day[test==0], main = paste("Day with Most Impressions"), xlab = "Control") 
+hist(mode_impr_hour[test==0], main = paste("Hour with Most Impressions"), xlab = "Control") 
+hist(tot_impr_decile[test==0], main = paste("Deciles by Total Impressions"), xlab = "Control") 
+
+hist(tot_impr[test==1], main = paste("Total Impressions"), xlab = "Treatment") 
+hist(mode_impr_day[test==1], main = paste("Day with Most Impressions"), xlab = "Treatment") 
+hist(mode_impr_hour[test==1], main = paste("Hour with Most Impressions"), xlab = "Treatment") 
+hist(tot_impr_decile[test==1], main = paste("Deciles by Total Impressions"), xlab = "Treatment") 
+
+detach(casedata)
+```
+These charts provide a visual display of the balance of the pre-experiment variables across the control and treatment groups. As we can see, the two groups are relatively well balanced across all the variables.
+
+## Plot the means and confidence intervals of "converted" by control and treatment
+```{r}
+attach(casedata)
+
+summary <- casedata %>%  
+  mutate(test = as.factor(test)) %>%       
+  group_by(test) %>%      
+  summarise(n = length(user_id),   
+            conversion = round(mean(converted),3),    
+            error = round(sd(converted)/sqrt(n),3),  
+            lowerCI = round(conversion - 1.96*error,3),  
+            upperCI = round(conversion + 1.96*error,3))
+
+kable(summary)  
+detach(casedata)
+```
+In this table we can see the means and confidence intervals for the "converted" variable across the control and treatment groups. The mean for the control group was lower, at 0.018, than for the treatment group, 0.026. The confidence interval for the treatment group is narrower than the one for the control group, which means that it has higher precision. We can be 95% confident that the true mean of the test group lies around 0.026. Since the mean of the treatment group is higher and the confidence interval does not overlap with the one for the control group, we can say that conversions are higher for the treatment group, which makes sense given that we would want our treatment effect to be positive.
+
+```{r}
+# Plot the information from that summary table
+summary %>%
+  ggplot(aes(x=test)) +
+  geom_point(aes(y = conversion), size = 3) +
+  scale_shape_manual(values=c(15, 16)) +
+  ggtitle("Average Conversion by Treatment") +
+  ylab("Conversion") + xlab("Treatment") +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(),axis.line = element_line(colour = "black"), 
+        axis.text.x= element_text(size = 10), legend.position=c(.5,.5),
+        plot.title=element_text(hjust=.5))+
+  geom_errorbar(aes(ymin = lowerCI,
+                    ymax = upperCI), width = .3)+
+  scale_color_manual(values=c("darkgrey","black"))
+```
+This graph plots the means and confidence intervals of "converted" by control and treatment. As seen in the previous graph, the mean and confidence intervals for the treatment group were higher than the control group, which means that the conversion rate was higher for the treatment group. Also, since the confidence interval for the treatment group was narrower, it means that it is more precise. 
+
+## Calculate the Average Treatment Effect (ATE)
+```{r}
+ATE <-matrix(NA,ncol = 4, nrow = 2)  
+colnames(ATE) <- c("Treatment Effect on Conversion", "Error", "Lower 95% CI", "Upper 95% CI" )
+rownames(ATE) <- c("Treatment", "Control")
+
+effect <-c(summary$conversion[2]-summary$conversion[1],summary$conversion[1])
+error_ate <- c (sqrt(summary$error[1]^2+summary$error[2]^2),NA )
+
+LCI <- effect-1.96*error_ate
+UCI <- effect+1.96*error_ate
+
+ATE[,1] <-round(effect,3)
+ATE[,2] <-round(error_ate,3)
+ATE[,3] <-round(LCI,3)
+ATE[,4] <-round(UCI,3)
+
+kable(ATE)
+```
+In this graph we can see the average treatment effect of the ads for the treatment relative to control. For the control group - when users do not see ads - the average conversion is 0.018. For the treatment group, however, conversion is 0.008 HIGHER. Furthermore, we can be 95% confident that the average treatment effect lies between 0.006 and 0.01. Since the confidence interval is greater than zero, we can say that seeing ads does increase conversion. 
+
+## Calculate the ATE using the regression approach 
+```{r}
+library("lmtest")
+library("sandwich")
+
+fit.converted <- lm(converted~test, data = casedata)  
+coeftest(fit.converted, vcov = vcovHC(fit.converted, type = "HC3"))  
+coefci(fit.converted, vcov = vcovHC(fit.converted)) 
+```
+This regression output shows the same results as our previous graph: the conversion for the "baseline", or when people do not see ads, is 0.018, and the treatment effect is 0.008, with confidence interval (0.006, 0.01). 
+
+## Create a summary table for both treatment and control group over the 10 deciles of total impressions
+```{r}
+attach(casedata)
+summary1 = casedata %>%  
+  mutate(test = as.factor(test)) %>%  
+  mutate(decile = as.factor(tot_impr_decile)) %>% 
+  group_by(test,decile) %>%        
+  summarise(n = length(user_id),            
+            m.converted = mean(converted),         
+            sd.converted = sd(converted),
+            m.total_impr = mean(tot_impr),
+            sd.total_impr = sd(tot_impr),
+            m.mode_impr_day = mean(mode_impr_day),
+            sd.mode_impr_day = sd(mode_impr_day),
+            m.mode_impr_hour = mean(mode_impr_hour),
+            sd.mode_impr_hour = sd(mode_impr_hour),)
+kable(summary1)
+detach(casedata)
+```
+This chart displays the sample size and the means and standard deviations of our variables of interest: converted, tot_impr, mode_impr_day, and mode_impr_hour. As we can see, the sample size of all deciles in the test group was larger than the sample size of the deciles in the control group. This is what we would expect, given that 96% of users were in the test group. For conversions, the highest mean was in the 10th decile of the test group. For total impressions, the 10th deciles for the test and control groups had the highest means. For the day of the week on which users encountered the most impressions, the average was a 4 (Thursday) for all deciles, which means that there was balance regarding which days the ads were delivered on. Similarly, for the hour of the day, the mean was around 14-15 for all deciles. 
+
+## Calculate the mean and the 95% CI for both treatment and control group over the 10 deciles of total impressions
+```{r}
+summary2 = casedata %>%  
+  mutate(test = as.factor(test)) %>%  
+  mutate(decile = as.factor(tot_impr_decile)) %>% 
+  group_by(test,decile) %>%        
+  summarise(n = length(user_id),            
+            m.converted = mean(converted),         
+            e.converted = sd(converted)/sqrt(n),
+            Lci.converted = m.converted - 1.96*e.converted,  
+            Uci.converted = m.converted + 1.96*e.converted,)
+```
+Now that we made the calculations, the next step is to plot them. 
+
+## Plot the means and confidence intervals
+```{r}
+summary2 %>% 
+  ggplot(aes(decile)) + 
+  geom_point(aes(y = m.converted, shape = test, color = test), size = 3) +  
+  geom_errorbar(aes(ymin = Lci.converted,
+                    ymax = Uci.converted, color=test), width = .15)+ 
+  ggtitle("Average Conversion by Treatment and Decile") +  
+  ylab("Average conversion") + xlab("Total Impressions Decile") + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(),axis.line = element_line(colour = "black"), 
+        axis.text.x= element_text(size = 10),
+        plot.title=element_text(hjust=.5) ) +
+  scale_shape_discrete(name = "Treatment group", labels = c("Control", "Treatment"))+ 
+  scale_color_discrete(name = "Treatment group", labels = c("Control", "Treatment"))
+```
+As we can see in this final graph, as the total impressions deciles increase, so does the average conversion, for both the control and the treatment groups. Furthermore, we can see that for the 9th and 10th deciles, the treatment group has higher conversions than the control group, and their confidence intervals do not overlap, meaning that there is a statistical difference between the two groups. However, for the first 8 deciles, the confidence intervals of the control and treatment groups do overlap, so we cannot assume that seeing the ads leads to higher conversions. 
